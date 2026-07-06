@@ -2,6 +2,8 @@ import discord
 import requests
 import json
 import os
+from flask import Flask
+import threading
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
@@ -57,7 +59,6 @@ async def on_message(message):
 
     content = message.content
 
-    # thêm link ảnh đính kèm
     if message.attachments:
         for a in message.attachments:
             content += f"\n{a.url}"
@@ -105,16 +106,14 @@ async def on_message_edit(before, after):
         for a in after.attachments:
             content += f"\n{a.url}"
 
-    r = requests.patch(
+    requests.patch(
         f"{WEBHOOK_URL}/messages/{webhook_msg_id}",
         json={
             "content": content
         }
     )
 
-    print(
-        f"Edited: {before.content} -> {after.content}"
-    )
+    print(f"Edited: {before.content} -> {after.content}")
 
 # -------------------------
 # Delete Message
@@ -146,5 +145,28 @@ async def on_message_delete(message):
     print(f"Deleted: {message.id}")
 
 # -------------------------
+# Flask Web Server
+# -------------------------
 
-client.run(TOKEN)
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot Running"
+
+# -------------------------
+# Start Discord Bot
+# -------------------------
+
+def run_bot():
+    client.run(TOKEN)
+
+# -------------------------
+# Main
+# -------------------------
+
+if __name__ == "__main__":
+    threading.Thread(target=run_bot).start()
+
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
