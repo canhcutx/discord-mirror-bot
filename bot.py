@@ -25,7 +25,8 @@ EMBED_DESCRIPTION = (
     "4. DouJunn\n"
     "5. Nam Con\n\n"
     "**DANH SÁCH TEAM AKAT:**\n"
-    "Các thành viên mặc đồ Akatsuki mới như ảnh dưới 👇"
+    "Các thành viên mặc đồ Akatsuki mới như ảnh dưới 👇\n"
+    "**KHÔNG MẶC ĐỒ AKATSUKI MỚI THÌ VẪN TÍNH HÓA ĐƠN NHƯ BÌNH THƯỜNG"
 )
 EMBED_COLOR = 0xE74C3C  # Mã màu đỏ Hex
 
