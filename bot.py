@@ -19,6 +19,7 @@ MAP_FILE = "message_map.json"
 # CẤU HÌNH NỘI DUNG EMBED ĐÍNH KÈM
 # ---------------------------------------------------------
 IMAGE_URL = "https://i.postimg.cc/m2MSpkf5/akat.png"
+
 EMBED_DESCRIPTION = (
     "**DANH SÁCH TEAM BAY TRẮNG:**\n"
     "1. Hào Milk\n"
@@ -70,9 +71,9 @@ def build_merged_embed(user_content):
     
     # Nếu tin nhắn gốc có nội dung thì thêm đường gạch ngang phân cách
     if text:
-        full_desc = f"{text}\n\n───────────────────\n**{EMBED_TITLE}**\n\n{EMBED_DESCRIPTION}"
+        full_desc = f"{text}\n\n───────────────────\n{EMBED_DESCRIPTION}"
     else:
-        full_desc = f"**{EMBED_TITLE}**\n\n{EMBED_DESCRIPTION}"
+        full_desc = EMBED_DESCRIPTION
 
     return {
         "description": full_desc,
