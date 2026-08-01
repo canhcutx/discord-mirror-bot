@@ -19,8 +19,6 @@ MAP_FILE = "message_map.json"
 # CẤU HÌNH NỘI DUNG EMBED ĐÍNH KÈM
 # ---------------------------------------------------------
 IMAGE_URL = "https://i.postimg.cc/m2MSpkf5/akat.png"
-
-EMBED_TITLE = "📋 DANH SÁCH THÀNH VIÊN"
 EMBED_DESCRIPTION = (
     "**DANH SÁCH TEAM BAY TRẮNG:**\n"
     "1. Hào Milk\n"
