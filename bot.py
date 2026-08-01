@@ -66,11 +66,18 @@ intents.message_content = True
 
 client = discord.Client(intents=intents)
 
-def create_embed():
-    """Hàm tạo cấu trúc Embed đính kèm"""
+def build_merged_embed(user_content):
+    """Hàm gộp tin nhắn gốc và danh sách thành 1 Embed duy nhất"""
+    text = user_content.strip()
+    
+    # Nếu tin nhắn gốc có nội dung thì thêm đường gạch ngang phân cách
+    if text:
+        full_desc = f"{text}\n\n───────────────────\n**{EMBED_TITLE}**\n\n{EMBED_DESCRIPTION}"
+    else:
+        full_desc = f"**{EMBED_TITLE}**\n\n{EMBED_DESCRIPTION}"
+
     return {
-        "title": EMBED_TITLE,
-        "description": EMBED_DESCRIPTION,
+        "description": full_desc,
         "color": EMBED_COLOR,
         "image": {"url": IMAGE_URL},
     }
@@ -101,7 +108,7 @@ async def on_message(message):
         for a in message.attachments:
             content += f"\n{a.url}"
 
-    # Gửi tin nhắn gốc kèm theo Embed danh sách team
+    # Gửi hoàn toàn bên trong Embed, không để content bên ngoài
     if WEBHOOK_URL:
         try:
             r = requests.post(
@@ -109,8 +116,7 @@ async def on_message(message):
                 json={
                     "username": message.author.display_name,
                     "avatar_url": str(message.author.display_avatar.url),
-                    "content": content,
-                    "embeds": [create_embed()],
+                    "embeds": [build_merged_embed(content)],
                 },
                 timeout=10
             )
@@ -152,7 +158,7 @@ async def on_message_edit(before, after):
         try:
             requests.patch(
                 f"{WEBHOOK_URL}/messages/{webhook_msg_id}",
-                json={"content": content, "embeds": [create_embed()]},
+                json={"embeds": [build_merged_embed(content)]},
                 timeout=10
             )
             print(f"Edited message ID: {before.id}")
