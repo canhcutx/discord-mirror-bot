@@ -22,10 +22,8 @@ IMAGE_URL = "https://i.postimg.cc/m2MSpkf5/akat.png"
 
 EMBED_DESCRIPTION = (
     "**DANH SÁCH TEAM BAY TRẮNG:**\n"
-    "1. Hào Milk\n"
-    "2. Gen Tổng\n"
-    "3. Bệu\n"
-    "4. Nam Con\n\n"
+    "1. Gen Tổng\n"
+    "2. Nam Con\n\n"
     "**DANH SÁCH TEAM AKAT:**\n"
     "Các thành viên mặc đồ Akatsuki mới như ảnh dưới 👇\n"
     "**KHÔNG MẶC ĐỒ AKATSUKI MỚI THÌ VẪN TÍNH HÓA ĐƠN NHƯ BÌNH THƯỜNG**"
