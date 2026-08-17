@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import threading
 import discord
 from flask import Flask
@@ -20,11 +21,12 @@ MAP_FILE = "message_map.json"
 # ---------------------------------------------------------
 IMAGE_URL = "https://i.postimg.cc/m2MSpkf5/akat.png"
 
+# Dùng \u200b (Zero-Width Space) sau \n để chống lỗi dính dòng trên Discord Mobile
 EMBED_DESCRIPTION = (
-    "**DANH SÁCH TEAM BAY TRẮNG:**\n"
+    "**DANH SÁCH TEAM BAY TRẮNG:**\n\u200b"
     "1. Gen Tổng\n"
     "2. Nam Con\n\n"
-    "**DANH SÁCH TEAM AKAT:**\n"
+    "**DANH SÁCH TEAM AKAT:**\n\u200b"
     "Các thành viên mặc đồ Akatsuki mới như ảnh dưới 👇\n"
     "**KHÔNG MẶC ĐỒ AKATSUKI MỚI THÌ VẪN TÍNH HÓA ĐƠN NHƯ BÌNH THƯỜNG**"
 )
@@ -61,13 +63,22 @@ intents.message_content = True
 
 client = discord.Client(intents=intents)
 
+def fix_mobile_markdown(text):
+    """
+    Sửa triệt để lỗi Discord Mobile nuốt dấu xuống dòng khi gặp:
+    **Tiêu đề:**
+    1. Nội dung
+    """
+    # Chèn ký tự tàng hình \u200b vào sau dấu xuống dòng trước các danh sách đánh số
+    return re.sub(r'(\n)(\d+\.)', r'\1\u200b\2', text)
+
 def build_merged_embed(user_content):
     """Hàm gộp tin nhắn gốc và danh sách thành 1 Embed duy nhất"""
     text = user_content.strip()
     
-    # Nếu tin nhắn gốc có nội dung thì thêm đường gạch ngang phân cách
     if text:
-        full_desc = f"{text}\n\n───────────────────\n{EMBED_DESCRIPTION}"
+        formatted_text = fix_mobile_markdown(text)
+        full_desc = f"{formatted_text}\n\n───────────────────\n{EMBED_DESCRIPTION}"
     else:
         full_desc = EMBED_DESCRIPTION
 
