@@ -7,7 +7,6 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 import requests
 
-# Ép buffer đẩy log ra tức thì
 sys.stdout.reconfigure(line_buffering=True)
 
 # -------------------------
@@ -22,11 +21,14 @@ SOURCE_CHANNEL_ID = int(RAW_CHANNEL_ID) if RAW_CHANNEL_ID.isdigit() else None
 MAP_FILE = "message_map.json"
 IMAGE_URL = "https://i.postimg.cc/m2MSpkf5/akat.png"
 
+# Dùng trực tiếp ký tự khoảng trắng không độ rộng \u200b
+ZWSP = "\u200b"
+
 EMBED_DESCRIPTION = (
-    "**DANH SÁCH TEAM BAY TRẮNG:**\n\u200b"
+    f"**DANH SÁCH TEAM BAY TRẮNG:**\n{ZWSP}"
     "1. Gen Tổng\n"
     "2. Nam Con\n\n"
-    "**DANH SÁCH TEAM AKAT:**\n\u200b"
+    f"**DANH SÁCH TEAM AKAT:**\n{ZWSP}"
     "Các thành viên mặc đồ Akatsuki mới như ảnh dưới 👇\n"
     "**KHÔNG MẶC ĐỒ AKATSUKI MỚI THÌ VẪN TÍNH HÓA ĐƠN NHƯ BÌNH THƯỜNG**"
 )
@@ -66,7 +68,8 @@ HEADERS = {
 }
 
 def fix_mobile_markdown(text):
-    return re.sub(r'(\n)(\d+\.)', r'\1\u200b\2', text)
+    # Dùng hàm lambda thay thế để tránh lỗi escape Regex
+    return re.sub(r'(\n)(\d+\.)', lambda m: m.group(1) + ZWSP + m.group(2), text)
 
 def build_merged_embed(user_content):
     text = user_content.strip()
@@ -113,7 +116,7 @@ async def on_message(message):
                 data = r.json()
                 message_map[str(message.id)] = data["id"]
                 save_map()
-                print(f"🚀 Đã forward tin nhắn sang Webhook thành công (Msg ID: {data['id']})")
+                print(f"🚀 Đã forward tin nhắn thành công (Msg ID: {data['id']})")
             else:
                 print(f"❌ Webhook lỗi HTTP {r.status_code}: {r.text}")
         except Exception as e:
@@ -187,11 +190,9 @@ def run_http_server():
 # Main
 # -------------------------
 if __name__ == "__main__":
-    # Khởi động server HTTP phụ ở thread riêng
     threading.Thread(target=run_http_server, daemon=True).start()
 
     if not TOKEN:
         print("❌ LỖI: Chưa có biến môi trường TOKEN!")
     else:
-        print("⏳ Đang kết nối tới Discord...")
         client.run(TOKEN)
