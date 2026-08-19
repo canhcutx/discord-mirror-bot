@@ -1,20 +1,12 @@
 import json
 import os
 import re
-import asyncio
-import discord
-from aiohttp import web
-import aiohttp
+from flask import Flask, request, jsonify
+import requests
 
-# -------------------------
-# Lấy biến môi trường
-# -------------------------
-TOKEN = (os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN") or "").strip()
+app = Flask(__name__)
+
 WEBHOOK_URL = (os.getenv("WEBHOOK_URL") or "").strip()
-
-RAW_CHANNEL_ID = (os.getenv("SOURCE_CHANNEL_ID") or "").strip()
-SOURCE_CHANNEL_ID = int(RAW_CHANNEL_ID) if RAW_CHANNEL_ID.isdigit() else None
-
 MAP_FILE = "message_map.json"
 
 IMAGE_URL = "https://i.postimg.cc/m2MSpkf5/akat.png"
@@ -29,9 +21,6 @@ EMBED_DESCRIPTION = (
 )
 EMBED_COLOR = 15158332
 
-# -------------------------
-# Load / Save mapping
-# -------------------------
 def load_map():
     if os.path.exists(MAP_FILE):
         try:
@@ -50,14 +39,6 @@ def save_map():
 
 message_map = load_map()
 
-# -------------------------
-# Discord Bot Setup
-# -------------------------
-intents = discord.Intents.default()
-intents.message_content = True
-
-client = discord.Client(intents=intents)
-
 def fix_mobile_markdown(text):
     return re.sub(r'(\n)(\d+\.)', r'\1\u200b\2', text)
 
@@ -75,122 +56,61 @@ def build_merged_embed(user_content):
         "image": {"url": IMAGE_URL},
     }
 
-@client.event
-async def on_ready():
-    print(f"==================================", flush=True)
-    print(f"✅ Bot Mirror ONLINE: {client.user}", flush=True)
-    print(f"📌 Kênh nguồn ID: {SOURCE_CHANNEL_ID}", flush=True)
-    print(f"==================================", flush=True)
+@app.route("/", methods=["GET", "HEAD"])
+def home():
+    return "Mirror Webhook Server is Alive!", 200
 
-@client.event
-async def on_message(message):
-    if message.author.bot:
-        return
+@app.route("/mirror", methods=["POST"])
+def mirror_endpoint():
+    data = request.get_json(silent=True) or {}
+    action = data.get("action", "create")  # create, edit, delete
+    source_id = str(data.get("message_id", ""))
+    content = data.get("content", "")
+    username = data.get("username", "Mirror Bot")
+    avatar_url = data.get("avatar_url", "")
 
-    if not SOURCE_CHANNEL_ID or message.channel.id != SOURCE_CHANNEL_ID:
-        return
+    if not WEBHOOK_URL:
+        return jsonify({"error": "Chưa cấu hình WEBHOOK_URL"}), 500
 
-    print(f"📩 Nhận tin nhắn ID: {message.id} từ {message.author.display_name}", flush=True)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-    content = message.content
-    if message.attachments:
-        for a in message.attachments:
-            content += f"\n{a.url}"
-
-    if WEBHOOK_URL:
-        # Sử dụng Webhook của discord.py (Bypass mọi Cloudflare IP check)
-        try:
-            async with aiohttp.ClientSession() as session:
-                webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
-                embed_data = build_merged_embed(content)
-                embed = discord.Embed.from_dict(embed_data)
-
-                sent_msg = await webhook.send(
-                    embed=embed,
-                    username=message.author.display_name,
-                    avatar_url=message.author.display_avatar.url,
-                    wait=True
-                )
-                message_map[str(message.id)] = str(sent_msg.id)
+    # 1. Tạo tin nhắn mới
+    if action == "create":
+        payload = {
+            "username": username,
+            "avatar_url": avatar_url,
+            "embeds": [build_merged_embed(content)]
+        }
+        res = requests.post(f"{WEBHOOK_URL}?wait=true", json=payload, headers=headers, timeout=10)
+        if res.status_code in [200, 204]:
+            target_id = res.json().get("id")
+            if source_id:
+                message_map[source_id] = target_id
                 save_map()
-                print(f"🚀 Đã forward tin nhắn ID: {message.id} -> Webhook Msg ID: {sent_msg.id}", flush=True)
-        except Exception as e:
-            print(f"❌ Lỗi gửi Webhook: {e}", flush=True)
+            return jsonify({"status": "created", "webhook_id": target_id}), 200
+        return jsonify({"error": res.text}), res.status_code
 
-@client.event
-async def on_message_edit(before, after):
-    if before.author.bot or before.channel.id != SOURCE_CHANNEL_ID:
-        return
+    # 2. Sửa tin nhắn
+    elif action == "edit":
+        if source_id not in message_map:
+            return jsonify({"error": "Không tìm thấy ID tin nhắn"}), 404
+        webhook_msg_id = message_map[source_id]
+        payload = {"embeds": [build_merged_embed(content)]}
+        res = requests.patch(f"{WEBHOOK_URL}/messages/{webhook_msg_id}", json=payload, headers=headers, timeout=10)
+        return jsonify({"status": "edited"}), res.status_code
 
-    source_id = str(before.id)
-    if source_id not in message_map:
-        return
+    # 3. Xóa tin nhắn
+    elif action == "delete":
+        if source_id not in message_map:
+            return jsonify({"error": "Không tìm thấy ID tin nhắn"}), 404
+        webhook_msg_id = message_map[source_id]
+        res = requests.delete(f"{WEBHOOK_URL}/messages/{webhook_msg_id}", headers=headers, timeout=10)
+        del message_map[source_id]
+        save_map()
+        return jsonify({"status": "deleted"}), res.status_code
 
-    webhook_msg_id = int(message_map[source_id])
-    content = after.content
-    if after.attachments:
-        for a in after.attachments:
-            content += f"\n{a.url}"
-
-    if WEBHOOK_URL:
-        try:
-            async with aiohttp.ClientSession() as session:
-                webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
-                embed_data = build_merged_embed(content)
-                embed = discord.Embed.from_dict(embed_data)
-
-                await webhook.edit_message(webhook_msg_id, embed=embed)
-                print(f"✏️ Đã cập nhật tin nhắn sửa ID: {before.id}", flush=True)
-        except Exception as e:
-            print(f"❌ Lỗi sửa Webhook: {e}", flush=True)
-
-@client.event
-async def on_message_delete(message):
-    if message.author.bot or message.channel.id != SOURCE_CHANNEL_ID:
-        return
-
-    source_id = str(message.id)
-    if source_id not in message_map:
-        return
-
-    webhook_msg_id = int(message_map[source_id])
-    if WEBHOOK_URL:
-        try:
-            async with aiohttp.ClientSession() as session:
-                webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
-                await webhook.delete_message(webhook_msg_id)
-                del message_map[source_id]
-                save_map()
-                print(f"🗑️ Đã xóa tin nhắn ID: {message.id}", flush=True)
-        except Exception as e:
-            print(f"❌ Lỗi xóa Webhook: {e}", flush=True)
-
-# -------------------------
-# Web Server Giữ Uptime (aiohttp)
-# -------------------------
-async def handle_ping(request):
-    return web.Response(text="Bot Mirror is Alive 24/7!")
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    # Đã xóa dòng add_head ở đây để tránh xung đột
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    print(f"🌐 Web Server đã mở tại port {port}", flush=True)
-    
-# -------------------------
-# Chạy đồng thời cả 2
-# -------------------------
-async def main():
-    await start_web_server()
-    if not TOKEN:
-        print("❌ LỖI: Chưa có biến môi trường TOKEN!", flush=True)
-        return
-    await client.start(TOKEN)
+    return jsonify({"error": "Invalid action"}), 400
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
