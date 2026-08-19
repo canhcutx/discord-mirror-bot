@@ -1,12 +1,20 @@
 import json
 import os
 import re
-from flask import Flask, request, jsonify
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import discord
 import requests
 
-app = Flask(__name__)
-
+# -------------------------
+# Lấy biến môi trường
+# -------------------------
+TOKEN = (os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN") or "").strip()
 WEBHOOK_URL = (os.getenv("WEBHOOK_URL") or "").strip()
+
+RAW_CHANNEL_ID = (os.getenv("SOURCE_CHANNEL_ID") or "").strip()
+SOURCE_CHANNEL_ID = int(RAW_CHANNEL_ID) if RAW_CHANNEL_ID.isdigit() else None
+
 MAP_FILE = "message_map.json"
 
 IMAGE_URL = "https://i.postimg.cc/m2MSpkf5/akat.png"
@@ -21,13 +29,16 @@ EMBED_DESCRIPTION = (
 )
 EMBED_COLOR = 15158332
 
+# -------------------------
+# Load / Save mapping
+# -------------------------
 def load_map():
     if os.path.exists(MAP_FILE):
         try:
             with open(MAP_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Lỗi đọc map: {e}", flush=True)
+            print(f"Lỗi đọc file map: {e}", flush=True)
     return {}
 
 def save_map():
@@ -35,9 +46,22 @@ def save_map():
         with open(MAP_FILE, "w", encoding="utf-8") as f:
             json.dump(message_map, f, indent=2)
     except Exception as e:
-        print(f"Lỗi lưu map: {e}", flush=True)
+        print(f"Lỗi lưu file map: {e}", flush=True)
 
 message_map = load_map()
+
+# -------------------------
+# Discord Bot Setup
+# -------------------------
+intents = discord.Intents.default()
+intents.message_content = True
+
+client = discord.Client(intents=intents)
+
+# Header trình duyệt để tránh bị chặn khi gọi Webhook
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
 
 def fix_mobile_markdown(text):
     return re.sub(r'(\n)(\d+\.)', r'\1\u200b\2', text)
@@ -56,61 +80,119 @@ def build_merged_embed(user_content):
         "image": {"url": IMAGE_URL},
     }
 
-@app.route("/", methods=["GET", "HEAD"])
-def home():
-    return "Mirror Webhook Server is Alive!", 200
+@client.event
+async def on_ready():
+    print("========================================", flush=True)
+    print(f"✅ Bot Mirror ONLINE: {client.user}", flush=True)
+    print(f"📌 Đang lắng nghe kênh ID: {SOURCE_CHANNEL_ID}", flush=True)
+    print("========================================", flush=True)
 
-@app.route("/mirror", methods=["POST"])
-def mirror_endpoint():
-    data = request.get_json(silent=True) or {}
-    action = data.get("action", "create")  # create, edit, delete
-    source_id = str(data.get("message_id", ""))
-    content = data.get("content", "")
-    username = data.get("username", "Mirror Bot")
-    avatar_url = data.get("avatar_url", "")
+@client.event
+async def on_message(message):
+    if message.author.bot:
+        return
 
-    if not WEBHOOK_URL:
-        return jsonify({"error": "Chưa cấu hình WEBHOOK_URL"}), 500
+    if not SOURCE_CHANNEL_ID or message.channel.id != SOURCE_CHANNEL_ID:
+        return
 
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    print(f"📩 Nhận tin nhắn mới ID: {message.id} | Người gửi: {message.author.display_name}", flush=True)
 
-    # 1. Tạo tin nhắn mới
-    if action == "create":
-        payload = {
-            "username": username,
-            "avatar_url": avatar_url,
-            "embeds": [build_merged_embed(content)]
-        }
-        res = requests.post(f"{WEBHOOK_URL}?wait=true", json=payload, headers=headers, timeout=10)
-        if res.status_code in [200, 204]:
-            target_id = res.json().get("id")
-            if source_id:
-                message_map[source_id] = target_id
+    content = message.content
+    if message.attachments:
+        for a in message.attachments:
+            content += f"\n{a.url}"
+
+    if WEBHOOK_URL:
+        try:
+            payload = {
+                "username": message.author.display_name,
+                "avatar_url": str(message.author.display_avatar.url),
+                "embeds": [build_merged_embed(content)],
+            }
+            r = requests.post(WEBHOOK_URL + "?wait=true", json=payload, headers=HEADERS, timeout=10)
+
+            if r.status_code in [200, 204]:
+                data = r.json()
+                message_map[str(message.id)] = data["id"]
                 save_map()
-            return jsonify({"status": "created", "webhook_id": target_id}), 200
-        return jsonify({"error": res.text}), res.status_code
+                print(f"🚀 Đã forward tin nhắn sang Webhook thành công (ID: {data['id']})", flush=True)
+            else:
+                print(f"❌ Webhook trả lỗi HTTP {r.status_code}: {r.text}", flush=True)
+        except Exception as e:
+            print(f"❌ Lỗi gửi Webhook: {e}", flush=True)
 
-    # 2. Sửa tin nhắn
-    elif action == "edit":
-        if source_id not in message_map:
-            return jsonify({"error": "Không tìm thấy ID tin nhắn"}), 404
-        webhook_msg_id = message_map[source_id]
-        payload = {"embeds": [build_merged_embed(content)]}
-        res = requests.patch(f"{WEBHOOK_URL}/messages/{webhook_msg_id}", json=payload, headers=headers, timeout=10)
-        return jsonify({"status": "edited"}), res.status_code
+@client.event
+async def on_message_edit(before, after):
+    if before.author.bot or before.channel.id != SOURCE_CHANNEL_ID:
+        return
 
-    # 3. Xóa tin nhắn
-    elif action == "delete":
-        if source_id not in message_map:
-            return jsonify({"error": "Không tìm thấy ID tin nhắn"}), 404
-        webhook_msg_id = message_map[source_id]
-        res = requests.delete(f"{WEBHOOK_URL}/messages/{webhook_msg_id}", headers=headers, timeout=10)
-        del message_map[source_id]
-        save_map()
-        return jsonify({"status": "deleted"}), res.status_code
+    source_id = str(before.id)
+    if source_id not in message_map:
+        return
 
-    return jsonify({"error": "Invalid action"}), 400
+    webhook_msg_id = message_map[source_id]
+    content = after.content
+    if after.attachments:
+        for a in after.attachments:
+            content += f"\n{a.url}"
 
-if __name__ == "__main__":
+    if WEBHOOK_URL:
+        try:
+            payload = {"embeds": [build_merged_embed(content)]}
+            r = requests.patch(f"{WEBHOOK_URL}/messages/{webhook_msg_id}", json=payload, headers=HEADERS, timeout=10)
+            print(f"✏️ Đã đồng bộ tin nhắn sửa (HTTP {r.status_code})", flush=True)
+        except Exception as e:
+            print(f"❌ Lỗi sửa Webhook: {e}", flush=True)
+
+@client.event
+async def on_message_delete(message):
+    if message.author.bot or message.channel.id != SOURCE_CHANNEL_ID:
+        return
+
+    source_id = str(message.id)
+    if source_id not in message_map:
+        return
+
+    webhook_msg_id = message_map[source_id]
+    if WEBHOOK_URL:
+        try:
+            requests.delete(f"{WEBHOOK_URL}/messages/{webhook_msg_id}", headers=HEADERS, timeout=10)
+            del message_map[source_id]
+            save_map()
+            print(f"🗑️ Đã xóa tin nhắn trên Webhook", flush=True)
+        except Exception as e:
+            print(f"❌ Lỗi xóa Webhook: {e}", flush=True)
+
+# -------------------------
+# Web Server Giữ Sống 24/7
+# -------------------------
+class KeepAliveHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Bot Mirror is Alive 24/7!")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # Tắt bớt log ping để bảng điều khiển gọn gàng
+
+def run_server():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    server = HTTPServer(("0.0.0.0", port), KeepAliveHandler)
+    server.serve_forever()
+
+# -------------------------
+# Chạy Bot
+# -------------------------
+if __name__ == "__main__":
+    # Khởi động server phụ giữ Uptime
+    threading.Thread(target=run_server, daemon=True).start()
+
+    if not TOKEN:
+        print("❌ LỖI: Thiếu biến môi trường TOKEN!", flush=True)
+    else:
+        client.run(TOKEN)
