@@ -1,15 +1,13 @@
-import asyncio
 import json
 import os
 import re
 import sys
 import threading
-import time
-import traceback
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
-from flask import Flask
 import requests
 
+# Ép buffer đẩy log ra tức thì
 sys.stdout.reconfigure(line_buffering=True)
 
 # -------------------------
@@ -88,7 +86,7 @@ def build_merged_embed(user_content):
 async def on_ready():
     print("========================================")
     print(f"✅ Bot Mirror ONLINE: {client.user}")
-    print(f"📌 Đang lắng nghe kênh ID: {SOURCE_CHANNEL_ID}")
+    print(f"📌 Đang theo dõi kênh ID: {SOURCE_CHANNEL_ID}")
     print("========================================")
 
 @client.event
@@ -96,7 +94,7 @@ async def on_message(message):
     if message.author.bot or not SOURCE_CHANNEL_ID or message.channel.id != SOURCE_CHANNEL_ID:
         return
 
-    print(f"📩 Nhận tin nhắn ID: {message.id} | Từ: {message.author.display_name}")
+    print(f"📩 Nhận tin nhắn ID: {message.id} từ {message.author.display_name}")
 
     content = message.content
     if message.attachments:
@@ -115,7 +113,7 @@ async def on_message(message):
                 data = r.json()
                 message_map[str(message.id)] = data["id"]
                 save_map()
-                print(f"🚀 Đã forward tin nhắn thành công (Msg ID: {data['id']})")
+                print(f"🚀 Đã forward tin nhắn sang Webhook thành công (Msg ID: {data['id']})")
             else:
                 print(f"❌ Webhook lỗi HTTP {r.status_code}: {r.text}")
         except Exception as e:
@@ -140,7 +138,7 @@ async def on_message_edit(before, after):
         try:
             payload = {"embeds": [build_merged_embed(content)]}
             r = requests.patch(f"{WEBHOOK_URL}/messages/{webhook_msg_id}", json=payload, headers=HEADERS, timeout=10)
-            print(f"✏️ Đã cập nhật tin nhắn sửa (HTTP {r.status_code})")
+            print(f"✏️ Đã đồng bộ tin sửa (HTTP {r.status_code})")
         except Exception as e:
             print(f"❌ Lỗi sửa Webhook: {e}")
 
@@ -164,36 +162,36 @@ async def on_message_delete(message):
             print(f"❌ Lỗi xóa Webhook: {e}")
 
 # -------------------------
-# Khởi chạy Bot với Loop riêng biệt
+# Web Server Giữ Sống 24/7 (Thread phụ)
 # -------------------------
-def run_discord():
+class KeepAliveHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Bot Mirror is Alive 24/7!")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+def run_http_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), KeepAliveHandler)
+    server.serve_forever()
+
+# -------------------------
+# Main
+# -------------------------
+if __name__ == "__main__":
+    # Khởi động server HTTP phụ ở thread riêng
+    threading.Thread(target=run_http_server, daemon=True).start()
+
     if not TOKEN:
         print("❌ LỖI: Chưa có biến môi trường TOKEN!")
-        return
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    while True:
-        try:
-            print("⏳ Đang kết nối tới Discord Gateway...")
-            loop.run_until_complete(client.start(TOKEN))
-        except Exception as e:
-            print(f"⚠️ Mất kết nối ({e}). Thử lại sau 10s...")
-            traceback.print_exc()
-            time.sleep(10)
-
-# Khởi động thread chạy bot
-threading.Thread(target=run_discord, daemon=True).start()
-
-# -------------------------
-# Flask App (Đáp ứng Render)
-# -------------------------
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Bot Mirror is Alive 24/7!", 200
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    else:
+        print("⏳ Đang kết nối tới Discord...")
+        client.run(TOKEN)
