@@ -1,24 +1,17 @@
 import json
 import os
 import re
-import threading
+import asyncio
 import discord
-from flask import Flask
-import cloudscraper
+from aiohttp import web
+import aiohttp
 
-# Khởi tạo scraper giả lập trình duyệt Chrome thật (bypass Cloudflare)
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    }
-)
-
+# -------------------------
+# Lấy biến môi trường
+# -------------------------
 TOKEN = (os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN") or "").strip()
 WEBHOOK_URL = (os.getenv("WEBHOOK_URL") or "").strip()
 
-# Ép kiểu int an toàn cho SOURCE_CHANNEL_ID
 RAW_CHANNEL_ID = (os.getenv("SOURCE_CHANNEL_ID") or "").strip()
 SOURCE_CHANNEL_ID = int(RAW_CHANNEL_ID) if RAW_CHANNEL_ID.isdigit() else None
 
@@ -36,13 +29,16 @@ EMBED_DESCRIPTION = (
 )
 EMBED_COLOR = 15158332
 
+# -------------------------
+# Load / Save mapping
+# -------------------------
 def load_map():
     if os.path.exists(MAP_FILE):
         try:
             with open(MAP_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Lỗi đọc file map: {e}", flush=True)
+            print(f"Lỗi đọc map: {e}", flush=True)
     return {}
 
 def save_map():
@@ -50,10 +46,13 @@ def save_map():
         with open(MAP_FILE, "w", encoding="utf-8") as f:
             json.dump(message_map, f, indent=2)
     except Exception as e:
-        print(f"Lỗi lưu file map: {e}", flush=True)
+        print(f"Lỗi lưu map: {e}", flush=True)
 
 message_map = load_map()
 
+# -------------------------
+# Discord Bot Setup
+# -------------------------
 intents = discord.Intents.default()
 intents.message_content = True
 
@@ -78,7 +77,10 @@ def build_merged_embed(user_content):
 
 @client.event
 async def on_ready():
-    print(f"✅ Bot Mirror online: {client.user} | Kênh nguồn: {SOURCE_CHANNEL_ID}", flush=True)
+    print(f"==================================", flush=True)
+    print(f"✅ Bot Mirror ONLINE: {client.user}", flush=True)
+    print(f"📌 Kênh nguồn ID: {SOURCE_CHANNEL_ID}", flush=True)
+    print(f"==================================", flush=True)
 
 @client.event
 async def on_message(message):
@@ -88,7 +90,7 @@ async def on_message(message):
     if not SOURCE_CHANNEL_ID or message.channel.id != SOURCE_CHANNEL_ID:
         return
 
-    print(f"📩 Nhận tin nhắn mới ID: {message.id} | Từ: {message.author}", flush=True)
+    print(f"📩 Nhận tin nhắn ID: {message.id} từ {message.author.display_name}", flush=True)
 
     content = message.content
     if message.attachments:
@@ -96,24 +98,22 @@ async def on_message(message):
             content += f"\n{a.url}"
 
     if WEBHOOK_URL:
+        # Sử dụng Webhook của discord.py (Bypass mọi Cloudflare IP check)
         try:
-            r = scraper.post(
-                WEBHOOK_URL + "?wait=true",
-                json={
-                    "username": message.author.display_name,
-                    "avatar_url": str(message.author.display_avatar.url),
-                    "embeds": [build_merged_embed(content)],
-                },
-                timeout=15
-            )
+            async with aiohttp.ClientSession() as session:
+                webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
+                embed_data = build_merged_embed(content)
+                embed = discord.Embed.from_dict(embed_data)
 
-            if r.status_code in [200, 204]:
-                data = r.json()
-                message_map[str(message.id)] = data["id"]
+                sent_msg = await webhook.send(
+                    embed=embed,
+                    username=message.author.display_name,
+                    avatar_url=message.author.display_avatar.url,
+                    wait=True
+                )
+                message_map[str(message.id)] = str(sent_msg.id)
                 save_map()
-                print(f" Đã forward tin nhắn ID: {message.id}", flush=True)
-            else:
-                print(f"❌ Webhook lỗi HTTP {r.status_code}: {r.text[:200]}", flush=True)
+                print(f"🚀 Đã forward tin nhắn ID: {message.id} -> Webhook Msg ID: {sent_msg.id}", flush=True)
         except Exception as e:
             print(f"❌ Lỗi gửi Webhook: {e}", flush=True)
 
@@ -126,7 +126,7 @@ async def on_message_edit(before, after):
     if source_id not in message_map:
         return
 
-    webhook_msg_id = message_map[source_id]
+    webhook_msg_id = int(message_map[source_id])
     content = after.content
     if after.attachments:
         for a in after.attachments:
@@ -134,12 +134,13 @@ async def on_message_edit(before, after):
 
     if WEBHOOK_URL:
         try:
-            r = scraper.patch(
-                f"{WEBHOOK_URL}/messages/{webhook_msg_id}",
-                json={"embeds": [build_merged_embed(content)]},
-                timeout=15
-            )
-            print(f" Đã sửa tin nhắn ID: {before.id} (HTTP {r.status_code})", flush=True)
+            async with aiohttp.ClientSession() as session:
+                webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
+                embed_data = build_merged_embed(content)
+                embed = discord.Embed.from_dict(embed_data)
+
+                await webhook.edit_message(webhook_msg_id, embed=embed)
+                print(f"✏️ Đã cập nhật tin nhắn sửa ID: {before.id}", flush=True)
         except Exception as e:
             print(f"❌ Lỗi sửa Webhook: {e}", flush=True)
 
@@ -152,29 +153,44 @@ async def on_message_delete(message):
     if source_id not in message_map:
         return
 
-    webhook_msg_id = message_map[source_id]
+    webhook_msg_id = int(message_map[source_id])
     if WEBHOOK_URL:
         try:
-            scraper.delete(f"{WEBHOOK_URL}/messages/{webhook_msg_id}", timeout=15)
-            del message_map[source_id]
-            save_map()
-            print(f"🗑️ Đã xóa tin nhắn ID: {message.id}", flush=True)
+            async with aiohttp.ClientSession() as session:
+                webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
+                await webhook.delete_message(webhook_msg_id)
+                del message_map[source_id]
+                save_map()
+                print(f"🗑️ Đã xóa tin nhắn ID: {message.id}", flush=True)
         except Exception as e:
             print(f"❌ Lỗi xóa Webhook: {e}", flush=True)
 
-app = Flask(__name__)
+# -------------------------
+# Web Server Giữ Uptime (aiohttp)
+# -------------------------
+async def handle_ping(request):
+    return web.Response(text="Bot Mirror is Alive 24/7!")
 
-@app.route("/")
-def home():
-    return "Bot Mirror is Alive 24/7!"
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    app.router.add_head("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"🌐 Web Server đã mở tại port {port}", flush=True)
 
-def run_bot():
-    if TOKEN:
-        client.run(TOKEN)
-    else:
-        print("❌ LỖI: Chưa cài đặt TOKEN biến môi trường!", flush=True)
+# -------------------------
+# Chạy đồng thời cả 2
+# -------------------------
+async def main():
+    await start_web_server()
+    if not TOKEN:
+        print("❌ LỖI: Chưa có biến môi trường TOKEN!", flush=True)
+        return
+    await client.start(TOKEN)
 
 if __name__ == "__main__":
-    threading.Thread(target=run_bot, daemon=True).start()
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    asyncio.run(main())
