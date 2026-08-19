@@ -1,10 +1,15 @@
 import json
 import os
 import re
+import sys
 import threading
+import traceback
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 import requests
+
+# Ép Python đẩy log ra ngay lập tức
+sys.stdout.reconfigure(line_buffering=True)
 
 # -------------------------
 # Lấy biến môi trường
@@ -16,7 +21,6 @@ RAW_CHANNEL_ID = (os.getenv("SOURCE_CHANNEL_ID") or "").strip()
 SOURCE_CHANNEL_ID = int(RAW_CHANNEL_ID) if RAW_CHANNEL_ID.isdigit() else None
 
 MAP_FILE = "message_map.json"
-
 IMAGE_URL = "https://i.postimg.cc/m2MSpkf5/akat.png"
 
 EMBED_DESCRIPTION = (
@@ -38,7 +42,7 @@ def load_map():
             with open(MAP_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Lỗi đọc file map: {e}", flush=True)
+            print(f"⚠️ Lỗi đọc file map: {e}")
     return {}
 
 def save_map():
@@ -46,7 +50,7 @@ def save_map():
         with open(MAP_FILE, "w", encoding="utf-8") as f:
             json.dump(message_map, f, indent=2)
     except Exception as e:
-        print(f"Lỗi lưu file map: {e}", flush=True)
+        print(f"⚠️ Lỗi lưu file map: {e}")
 
 message_map = load_map()
 
@@ -58,7 +62,6 @@ intents.message_content = True
 
 client = discord.Client(intents=intents)
 
-# Header trình duyệt để tránh bị chặn khi gọi Webhook
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -82,10 +85,10 @@ def build_merged_embed(user_content):
 
 @client.event
 async def on_ready():
-    print("========================================", flush=True)
-    print(f"✅ Bot Mirror ONLINE: {client.user}", flush=True)
-    print(f"📌 Đang lắng nghe kênh ID: {SOURCE_CHANNEL_ID}", flush=True)
-    print("========================================", flush=True)
+    print("========================================")
+    print(f"✅ Bot Mirror ONLINE: {client.user}")
+    print(f"📌 Đang lắng nghe kênh ID: {SOURCE_CHANNEL_ID}")
+    print("========================================")
 
 @client.event
 async def on_message(message):
@@ -95,7 +98,7 @@ async def on_message(message):
     if not SOURCE_CHANNEL_ID or message.channel.id != SOURCE_CHANNEL_ID:
         return
 
-    print(f"📩 Nhận tin nhắn mới ID: {message.id} | Người gửi: {message.author.display_name}", flush=True)
+    print(f"📩 Nhận tin nhắn ID: {message.id} | Từ: {message.author.display_name}")
 
     content = message.content
     if message.attachments:
@@ -115,11 +118,11 @@ async def on_message(message):
                 data = r.json()
                 message_map[str(message.id)] = data["id"]
                 save_map()
-                print(f"🚀 Đã forward tin nhắn sang Webhook thành công (ID: {data['id']})", flush=True)
+                print(f"🚀 Đã forward tin nhắn thành công sang Webhook (Msg ID: {data['id']})")
             else:
-                print(f"❌ Webhook trả lỗi HTTP {r.status_code}: {r.text}", flush=True)
+                print(f"❌ Webhook trả mã lỗi HTTP {r.status_code}: {r.text}")
         except Exception as e:
-            print(f"❌ Lỗi gửi Webhook: {e}", flush=True)
+            print(f"❌ Lỗi gửi Webhook: {e}")
 
 @client.event
 async def on_message_edit(before, after):
@@ -140,9 +143,9 @@ async def on_message_edit(before, after):
         try:
             payload = {"embeds": [build_merged_embed(content)]}
             r = requests.patch(f"{WEBHOOK_URL}/messages/{webhook_msg_id}", json=payload, headers=HEADERS, timeout=10)
-            print(f"✏️ Đã đồng bộ tin nhắn sửa (HTTP {r.status_code})", flush=True)
+            print(f"✏️ Đã cập nhật tin nhắn chỉnh sửa (HTTP {r.status_code})")
         except Exception as e:
-            print(f"❌ Lỗi sửa Webhook: {e}", flush=True)
+            print(f"❌ Lỗi sửa Webhook: {e}")
 
 @client.event
 async def on_message_delete(message):
@@ -159,9 +162,9 @@ async def on_message_delete(message):
             requests.delete(f"{WEBHOOK_URL}/messages/{webhook_msg_id}", headers=HEADERS, timeout=10)
             del message_map[source_id]
             save_map()
-            print(f"🗑️ Đã xóa tin nhắn trên Webhook", flush=True)
+            print(f"🗑️ Đã xóa tin nhắn trên Webhook")
         except Exception as e:
-            print(f"❌ Lỗi xóa Webhook: {e}", flush=True)
+            print(f"❌ Lỗi xóa Webhook: {e}")
 
 # -------------------------
 # Web Server Giữ Sống 24/7
@@ -178,21 +181,30 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        pass  # Tắt bớt log ping để bảng điều khiển gọn gàng
+        pass
 
 def run_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), KeepAliveHandler)
-    server.serve_forever()
+    try:
+        port = int(os.environ.get("PORT", 10000))
+        server = HTTPServer(("0.0.0.0", port), KeepAliveHandler)
+        print(f"🌐 Web Server đã mở tại port {port}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"⚠️ Lỗi Web Server: {e}")
 
 # -------------------------
-# Chạy Bot
+# Main
 # -------------------------
 if __name__ == "__main__":
-    # Khởi động server phụ giữ Uptime
-    threading.Thread(target=run_server, daemon=True).start()
+    try:
+        # Khởi chạy Web Server ở luồng phụ
+        threading.Thread(target=run_server, daemon=True).start()
 
-    if not TOKEN:
-        print("❌ LỖI: Thiếu biến môi trường TOKEN!", flush=True)
-    else:
-        client.run(TOKEN)
+        if not TOKEN:
+            print("❌ LỖI NGHIÊM TRỌNG: Chưa cấu hình biến môi trường TOKEN hoặc DISCORD_TOKEN trên Render!")
+        else:
+            print("⏳ Đang kết nối tới Discord Gateway...")
+            client.run(TOKEN)
+    except Exception:
+        print("❌ LỖI SẬP BOT:")
+        traceback.print_exc()
