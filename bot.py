@@ -174,14 +174,14 @@ async def handle_ping(request):
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", handle_ping)
-    app.router.add_head("/", handle_ping)
+    # Đã xóa dòng add_head ở đây để tránh xung đột
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     print(f"🌐 Web Server đã mở tại port {port}", flush=True)
-
+    
 # -------------------------
 # Chạy đồng thời cả 2
 # -------------------------
